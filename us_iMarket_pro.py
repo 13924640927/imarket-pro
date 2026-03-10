@@ -263,37 +263,38 @@ if not prices.empty and ticker in prices.columns:
         ax_v.axhline(20, color='orange', ls='--')
         ax_v.fill_between(vix_df.index, vix_df['Close'], 20, where=(vix_df['Close'] > 20), color='red', alpha=0.1)
         st.pyplot(fig_v)
-# --- 7. Integrated Professional Earnings Module --- (定位到这里进行替换)
+
+
+# --- 7. Integrated Professional Earnings Module (稳健版) ---
     with earn_col:
         st.subheader("📅 Earnings Status")
         ticker_obj = yf.Ticker(ticker)
         next_earn_date = None
         
         try:
-            # 💡 核心修复：优先从 info 字典读取时间戳，这在云端最稳
+            # 路径 A: 尝试从 info 字典读取时间戳（这是云端最快最隐蔽的路径）
             ts = ticker_obj.info.get('nextEarningsDate')
             if ts:
                 next_earn_date = datetime.fromtimestamp(ts).date()
             
-            # 如果 info 没拿到，再尝试你原来的 get_earnings_dates
+            # 路径 B: 如果 A 失败，尝试官方排期表（旧代码的主要逻辑）
             if next_earn_date is None:
                 earnings = ticker_obj.get_earnings_dates(limit=1)
                 if earnings is not None and not earnings.empty:
                     next_earn_date = earnings.index[0].date()
                     
-            # 如果还是没拿到，尝试原来的 calendar
+            # 路径 C: 尝试日历抓取（处理多格式兼容：字典或 DataFrame）
             if next_earn_date is None:
                 cal = ticker_obj.calendar
-                if isinstance(cal, pd.DataFrame) and not cal.empty:
-                    next_earn_date = cal.iloc[0, 0].date()
-                elif isinstance(cal, dict) and 'Earnings Date' in cal:
+                if isinstance(cal, dict) and 'Earnings Date' in cal:
                     next_earn_date = cal.get('Earnings Date')[0].date()
-        except:
+                elif isinstance(cal, pd.DataFrame) and not cal.empty:
+                    next_earn_date = cal.iloc[0, 0].date()
+        except Exception as e:
+            # 捕获异常但不中断程序
             pass
 
-                    
-
-        # --- 专业化显示逻辑 ---
+        # --- 统一渲染逻辑 ---
         if next_earn_date:
             days_left = (next_earn_date - datetime.now().date()).days
             if days_left >= 0:
@@ -301,12 +302,11 @@ if not prices.empty and ticker in prices.columns:
                 if days_left <= 7:
                     st.error("⚠️ Earnings Week: High Volatility!")
             else:
+                # 如果获取到的是过去的时间，说明 Yahoo 还没更新下一次，显示为最后一次
                 st.info(f"Last Earnings: {next_earn_date}")
         else:
-            # 重点：不再使用 st.warning，改用不刺眼的 st.caption 或 st.info
-            st.caption("ℹ️ No upcoming earnings date confirmed by Yahoo Finance.")
-        
-        
+            # 线上报错的根源就在这里：不再显示黄色 warning，改用不刺眼的 caption
+            st.caption("ℹ️ No upcoming earnings confirmed by Yahoo Finance.")
         
 
     # --- Integrated Tested News Module ---
