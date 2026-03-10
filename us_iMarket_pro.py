@@ -9,10 +9,20 @@ from datetime import datetime
 import google.generativeai as genai # 添加这一行
 
 # --- 1. Basic Configuration ---
-st.set_page_config(page_title="iMarket Pro Sentiment Monitor", layout="wide")
-
+st.set_page_config(
+    page_title="iMarket Professional | AI-Quant Terminal", 
+    page_icon="⚖️", # 或者 "📈"
+    layout="wide"
+    )
 def run_gemini_pro_analysis(ticker, tech_metrics, news_summary):
-    api_key_val = "GEMINI_API_KEY"
+
+    # ✅ 修改这一行：从 Streamlit 的安全设置里读取，而不是写死在代码里
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key_val = st.secrets["GEMINI_API_KEY"]
+    else:
+        # 这里的报错会提醒你在后台配置 Key
+        return "❌ 错误：未在 Streamlit Cloud 后台配置 GEMINI_API_KEY"
+    
     genai.configure(api_key=api_key_val)
     
     try:
