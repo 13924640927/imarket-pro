@@ -264,55 +264,28 @@ if not prices.empty and ticker in prices.columns:
         ax_v.fill_between(vix_df.index, vix_df['Close'], 20, where=(vix_df['Close'] > 20), color='red', alpha=0.1)
         st.pyplot(fig_v)
 
-
-# --- 7. Integrated Professional Earnings Module (稳健版) ---
-# --- 7. 云端强化版 Earnings Module ---
+    # --- Integrated Tested Earnings Module ---
     with earn_col:
-        st.subheader("📅 Earnings Status")
+        st.subheader("📅 Earnings Warning")
         ticker_obj = yf.Ticker(ticker)
         next_earn_date = None
-        
         try:
-            # 【策略 1】尝试从 calendar 属性直接读取 (云端最稳的方法)
-            # yfinance 的 .calendar 有时会触发不同的 API 路径，躲过 info 的封锁
-            cal = ticker_obj.calendar
-            if cal is not None:
-                if isinstance(cal, dict) and 'Earnings Date' in cal:
-                    next_earn_date = cal['Earnings Date'][0].date()
-                elif isinstance(cal, pd.DataFrame) and not cal.empty:
-                    # 某些版本返回 DF，取第一行第一列
-                    next_earn_date = cal.iloc[0, 0].date()
-
-            # 【策略 2】如果策略 1 失败，再尝试从 info 读取 (本地常用)
+            earnings = ticker_obj.get_earnings_dates(limit=1)
+            if not earnings.empty: next_earn_date = earnings.index[0].date()
             if next_earn_date is None:
-                ts = ticker_obj.info.get('nextEarningsDate')
-                if ts:
-                    next_earn_date = datetime.fromtimestamp(ts).date()
+                cal = ticker_obj.calendar
+                if isinstance(cal, dict): next_earn_date = cal.get('Earnings Date')[0].date()
+                elif isinstance(cal, pd.DataFrame): next_earn_date = cal.iloc[0, 0].date()
+        except: pass
 
-            # 【策略 3】如果还是没有，尝试抓取历史表中的最新一行
-            if next_earn_date is None:
-                earn_dates = ticker_obj.get_earnings_dates(limit=1)
-                if earn_dates is not None and not earn_dates.empty:
-                    next_earn_date = earn_dates.index[0].date()
-        except:
-            pass
-
-        # --- 智能显示逻辑 ---
         if next_earn_date:
-            today = datetime.now().date()
-            days_left = (next_earn_date - today).days
-            
-            if days_left >= 0:
-                st.success(f"**{next_earn_date}** (In **{days_left}** days)")
-                if days_left <= 7:
-                    st.error("⚠️ Earnings Week: High Volatility!")
-            else:
-                # 即使拿到的是过去日期，也比显示“无法获取”要专业
-                st.info(f"Last Earnings: {next_earn_date}")
+            days_left = (next_earn_date - datetime.now().date()).days
+            st.info(f"Next Earnings: **{next_earn_date}** (In **{days_left}** days)")
+            if 0 <= days_left <= 7: st.error("⚠️ Earnings Week: High IV expected!")
         else:
-            # 💡 终极兜底：如果云端 IP 被彻底封锁，提供一个点击跳转链接
-            st.warning("⚠️ Data Sync Limited on Cloud")
-            st.caption(f"[Check {ticker} on Yahoo Finance ↗️](https://finance.yahoo.com/quote/{ticker}/analysis)")
+            st.warning("⚠️ Could not fetch earnings date automatically.")
+        
+        
         
 
     # --- Integrated Tested News Module ---
@@ -374,7 +347,6 @@ if not prices.empty and ticker in prices.columns:
 
 else:
     st.error("❌ Data Fetch Failed. Check connection or Ticker.")
-
 
 
 
