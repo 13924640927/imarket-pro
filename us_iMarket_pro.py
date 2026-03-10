@@ -339,7 +339,7 @@ if not prices.empty and ticker in prices.columns:
     # 提取新闻标题列表
     news_titles = [item['title'] for item in final_news] if final_news else "No recent news found."
 
-    if st.button("🚀 生成实时综部分析报告"):
+    if st.button("🚀 生成实时深度研究报告"):
         with st.spinner("Gemini 正在联网分析中..."):
             # 直接调用上面定义的函数
             report = run_gemini_pro_analysis(ticker, tech_data, news_titles)
