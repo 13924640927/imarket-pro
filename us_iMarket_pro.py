@@ -263,34 +263,35 @@ if not prices.empty and ticker in prices.columns:
         ax_v.axhline(20, color='orange', ls='--')
         ax_v.fill_between(vix_df.index, vix_df['Close'], 20, where=(vix_df['Close'] > 20), color='red', alpha=0.1)
         st.pyplot(fig_v)
-
-    # --- 7. Integrated Professional Earnings Module ---
+# --- 7. Integrated Professional Earnings Module --- (定位到这里进行替换)
     with earn_col:
         st.subheader("📅 Earnings Status")
         ticker_obj = yf.Ticker(ticker)
         next_earn_date = None
         
         try:
-            # 路径 A: 尝试获取官方排期表
-            earnings = ticker_obj.get_earnings_dates(limit=1)
-            if earnings is not None and not earnings.empty:
-                next_earn_date = earnings.index[0].date()
-                
-            # 路径 B: 如果 A 失败，尝试日历抓取 (含多格式兼容)
+            # 💡 核心修复：优先从 info 字典读取时间戳，这在云端最稳
+            ts = ticker_obj.info.get('nextEarningsDate')
+            if ts:
+                next_earn_date = datetime.fromtimestamp(ts).date()
+            
+            # 如果 info 没拿到，再尝试你原来的 get_earnings_dates
+            if next_earn_date is None:
+                earnings = ticker_obj.get_earnings_dates(limit=1)
+                if earnings is not None and not earnings.empty:
+                    next_earn_date = earnings.index[0].date()
+                    
+            # 如果还是没拿到，尝试原来的 calendar
             if next_earn_date is None:
                 cal = ticker_obj.calendar
-                if isinstance(cal, dict) and 'Earnings Date' in cal:
-                    next_earn_date = cal.get('Earnings Date')[0].date()
-                elif isinstance(cal, pd.DataFrame) and not cal.empty:
+                if isinstance(cal, pd.DataFrame) and not cal.empty:
                     next_earn_date = cal.iloc[0, 0].date()
-                    
-            # 路径 C: 终极兜底 - 从 info 字典直接读时间戳 (最稳的方法)
-            if next_earn_date is None:
-                ts = ticker_obj.info.get('nextEarningsDate')
-                if ts:
-                    next_earn_date = datetime.fromtimestamp(ts).date()
+                elif isinstance(cal, dict) and 'Earnings Date' in cal:
+                    next_earn_date = cal.get('Earnings Date')[0].date()
         except:
             pass
+
+                    
 
         # --- 专业化显示逻辑 ---
         if next_earn_date:
@@ -367,6 +368,7 @@ if not prices.empty and ticker in prices.columns:
 
 else:
     st.error("❌ Data Fetch Failed. Check connection or Ticker.")
+
 
 
 
