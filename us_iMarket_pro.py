@@ -266,47 +266,53 @@ if not prices.empty and ticker in prices.columns:
 
 
 # --- 7. Integrated Professional Earnings Module (稳健版) ---
+# --- 7. 云端强化版 Earnings Module ---
     with earn_col:
         st.subheader("📅 Earnings Status")
         ticker_obj = yf.Ticker(ticker)
         next_earn_date = None
         
         try:
-            # 路径 A: 尝试从 info 字典读取时间戳（这是云端最快最隐蔽的路径）
-            ts = ticker_obj.info.get('nextEarningsDate')
-            if ts:
-                next_earn_date = datetime.fromtimestamp(ts).date()
-            
-            # 路径 B: 如果 A 失败，尝试官方排期表（旧代码的主要逻辑）
-            if next_earn_date is None:
-                earnings = ticker_obj.get_earnings_dates(limit=1)
-                if earnings is not None and not earnings.empty:
-                    next_earn_date = earnings.index[0].date()
-                    
-            # 路径 C: 尝试日历抓取（处理多格式兼容：字典或 DataFrame）
-            if next_earn_date is None:
-                cal = ticker_obj.calendar
+            # 【策略 1】尝试从 calendar 属性直接读取 (云端最稳的方法)
+            # yfinance 的 .calendar 有时会触发不同的 API 路径，躲过 info 的封锁
+            cal = ticker_obj.calendar
+            if cal is not None:
                 if isinstance(cal, dict) and 'Earnings Date' in cal:
-                    next_earn_date = cal.get('Earnings Date')[0].date()
+                    next_earn_date = cal['Earnings Date'][0].date()
                 elif isinstance(cal, pd.DataFrame) and not cal.empty:
+                    # 某些版本返回 DF，取第一行第一列
                     next_earn_date = cal.iloc[0, 0].date()
-        except Exception as e:
-            # 捕获异常但不中断程序
+
+            # 【策略 2】如果策略 1 失败，再尝试从 info 读取 (本地常用)
+            if next_earn_date is None:
+                ts = ticker_obj.info.get('nextEarningsDate')
+                if ts:
+                    next_earn_date = datetime.fromtimestamp(ts).date()
+
+            # 【策略 3】如果还是没有，尝试抓取历史表中的最新一行
+            if next_earn_date is None:
+                earn_dates = ticker_obj.get_earnings_dates(limit=1)
+                if earn_dates is not None and not earn_dates.empty:
+                    next_earn_date = earn_dates.index[0].date()
+        except:
             pass
 
-        # --- 统一渲染逻辑 ---
+        # --- 智能显示逻辑 ---
         if next_earn_date:
-            days_left = (next_earn_date - datetime.now().date()).days
+            today = datetime.now().date()
+            days_left = (next_earn_date - today).days
+            
             if days_left >= 0:
                 st.success(f"**{next_earn_date}** (In **{days_left}** days)")
                 if days_left <= 7:
                     st.error("⚠️ Earnings Week: High Volatility!")
             else:
-                # 如果获取到的是过去的时间，说明 Yahoo 还没更新下一次，显示为最后一次
+                # 即使拿到的是过去日期，也比显示“无法获取”要专业
                 st.info(f"Last Earnings: {next_earn_date}")
         else:
-            # 线上报错的根源就在这里：不再显示黄色 warning，改用不刺眼的 caption
-            st.caption("ℹ️ No upcoming earnings confirmed by Yahoo Finance.")
+            # 💡 终极兜底：如果云端 IP 被彻底封锁，提供一个点击跳转链接
+            st.warning("⚠️ Data Sync Limited on Cloud")
+            st.caption(f"[Check {ticker} on Yahoo Finance ↗️](https://finance.yahoo.com/quote/{ticker}/analysis)")
         
 
     # --- Integrated Tested News Module ---
