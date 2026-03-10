@@ -14,46 +14,38 @@ st.set_page_config(
     page_icon="⚖️", # 或者 "📈"
     layout="wide"
     )
-def run_gemini_pro_analysis(ticker, tech_metrics, news_summary):
-
-    # ✅ 修改这一行：从 Streamlit 的安全设置里读取，而不是写死在代码里
+# 修改前: def run_gemini_pro_analysis(ticker, tech_metrics, news_summary):
+# 修改后:
+def run_gemini_pro_analysis(ticker, tech_metrics, news_summary, language="中文"):
     if "GEMINI_API_KEY" in st.secrets:
         api_key_val = st.secrets["GEMINI_API_KEY"]
     else:
-        # 这里的报错会提醒你在后台配置 Key
         return "❌ 错误：未在 Streamlit Cloud 后台配置 GEMINI_API_KEY"
     
     genai.configure(api_key=api_key_val)
     
     try:
-        # 1. 自动寻找你账号下可用的生成模型 (核心修复)
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
         if not available_models:
-            return "❌ 你的 API Key 没有任何可用模型，请检查 Google AI Studio 的项目状态。"
+            return "❌ 你的 API Key 没有任何可用模型。"
         
-        # 优先寻找 flash，其次寻找 pro，都没有就用第一个可用的
-        target_model = ""
-        for m in available_models:
-            if 'flash' in m.lower():
-                target_model = m
-                break
-        if not target_model:
-            target_model = available_models[0]
-
-        # 2. 使用自动找到的 target_model
+        target_model = next((m for m in available_models if 'flash' in m.lower()), available_models[0])
         model = genai.GenerativeModel(target_model)
 
+        # --- 关键修改：根据选择切换 AI 的写作指令 ---
+        role_instruction = "Top Wall Street Quant Strategist" if language == "English" else "顶级华尔街量化策略师"
+        task_instruction = "write a deep research report" if language == "English" else "撰写深度研究报告"
+
         prompt = f"""
-        作为顶级华尔街量化策略师，请针对股票 {ticker} 撰写深度研究报告。
-        【当前技术指标】: {tech_metrics}
-        【近期市场新闻概要】: {news_summary}
-        请按 Markdown 框架生成报告: 包含核心结论、技术面扫描、风险剖析及投资建议。
+        As a {role_instruction}, please {task_instruction} for {ticker}.
+        【Technical Metrics】: {tech_metrics}
+        【Recent News】: {news_summary}
+        Framework: Core Thesis, Technical Scan, Risk Analysis, and Investment Guidance.
+        Output Language: {language}
         """
 
         response = model.generate_content(prompt)
         return response.text
-
     except Exception as e:
         return f"❌ AI 分析出错: {str(e)}"
     
@@ -111,9 +103,15 @@ else:
 
 lookback = st.sidebar.slider("Lookback Period (Divergence)", 30, 250, 90)
 st.sidebar.markdown("---")
-st.sidebar.caption("🚀 **Designed by J**")
-st.sidebar.caption("🤖 **Powered by Gemini AI**")
-st.sidebar.caption("📅 *v2.5 | March 2026*")
+# 这里的变量名 report_lang 必须对应你 352 行使用的名字
+report_lang = st.sidebar.selectbox(" 🌐🇺🇸/🇨🇳", ["English", "中文"])
+
+
+st.sidebar.markdown("---")
+st.sidebar.caption("🚀  Designed by J")
+st.sidebar.caption("🤖  Powered by Gemini AI")
+st.sidebar.caption("📅  v3.0 | March 2026")
+
 
 # --- 5. Market Index Bar Execution ---
 index_data = fetch_market_indices()
@@ -183,74 +181,103 @@ if not prices.empty and ticker in prices.columns:
     ax_r.axhline(70, color='red', ls='--'); ax_r.axhline(30, color='green', ls='--')
     ax_p.legend(); ax_r.legend()
     st.pyplot(fig_div)
+    
+    
+# --- 8. Chart Legend Expander (Professional Analysis) ---
+    if report_lang == "English":
+        with st.expander("📖 Professional Analysis: RSI & Volume Divergence"):
+            st.markdown(f"""
+            ### 1. RSI Divergence: Momentum Exhaustion
+            RSI measures the 'speed' and 'strength' of price movements.
 
-    # Expander
-    # --- 8. Chart Legend Expander (Professional Analysis) ---
-    with st.expander("📖 核心技术指标深度解读：RSI 与 量价背离"):
-        st.markdown(f"""
-        ### 1. RSI 背离：判断“动力”是否衰竭
-        RSI 衡量的是价格上涨或下跌的“速度”和“力度”。
+            #### **A. Bearish Divergence —— Exit Signal**
+            * **Phenomenon**: Price hits a **new high**, but RSI line is trending **downward** (lower peak).
+            * **Meaning**: Upward momentum is fading despite rising prices. Like a car sprinting on an empty tank.
+            * **Action**: Consider reducing positions or raising stop-loss levels.
 
-        #### **A. 看跌背离 (Bearish Divergence) —— 逃顶信号**
-        *   **现象**：股价创出**新高**，但 RSI 线却在走**下坡路**（高点比前一个高点低）。
-        *   **含义**：虽然价格在涨，但支撑上涨的动能正在减弱。这就像一辆赛车冲刺时燃油即将耗尽，虽然还在往前冲，但随时会熄火。
-        *   **操作**：建议减仓或调高止损位。
+            #### **B. Bullish Divergence —— Buy Signal**
+            * **Phenomenon**: Price hits a **new low**, but RSI line is trending **upward** (higher trough).
+            * **Meaning**: Selling pressure is exhausting. 
+            * **Action**: System detects **{ticker}** may be in this zone; a rebound is often imminent.
 
-        #### **B. 看涨背离 (Bullish Divergence) —— 抄底信号**
-        *   **现象**：股价创出**新低**，但 RSI 线却在走**上坡路**（低点比前一个低点高）。
-        *   **含义**：虽然价格在跌，但下跌的杀伤力已经减弱，空头力量正在衰竭。
-        *   **操作**：系统检测到 **{ticker}** 可能正处于此类信号中，通常预示反弹即将来临。
+            ---
 
-        ---
+            ### 2. Volume Divergence: Capital Support
+            Volume is the "fuel" of a stock. **Rising price with rising volume** is the healthiest trend.
 
-        ### 2. 量价背离：判断“资金”是否支持
-        成交量 (Volume) 是股票的“汽油”。**量价齐升**才是最健康的上涨。
+            #### **A. Low Volume Rally —— False Prosperity**
+            * **Meaning**: Buying power is depleted; usually retail chasing while institutions exit. High risk of sharp reversal.
 
-        #### **A. 缩量上涨 (量价背离) —— 虚假繁荣**
-        *   **现象**：价格持续上涨，但成交量却一天比一天小。
-        *   **含义**：买入力量枯竭，通常是散户追涨而机构在悄悄出货。一旦买盘断档，股价极易剧烈回调。
+            #### **B. High Volume Crash —— Panic Selling**
+            * **Meaning**: Massive panic selling. If at the end of a downtrend, it signals a "washout"; if at a peak, it's a disaster.
 
-        #### **B. 放量下跌 (量价同步) —— 恐慌杀跌**
-        *   **现象**：价格大幅下跌，同时成交量剧增。
-        *   **含义**：大量恐慌盘不计成本割肉。若出现在下跌末端，往往意味着“洗盘”结束；若出现在高位，则是趋势反转的灾难。
+            #### **C. Low Volume Pullback —— Consolidation**
+            * **Meaning**: Selling is not aggressive; usually healthy profit-taking or institutional "shaking the tree".
+            """)
+    else:
+        with st.expander("📖 核心技术指标深度解读：RSI 与 量价背离"):
+            st.markdown(f"""
+            ### 1. RSI 背离：判断“动力”是否衰竭
+            RSI 衡量的是价格上涨或下跌的“速度”和“力度”。
 
-        #### **C. 缩量下跌 —— 阴跌/洗盘**
-        *   **现象**：价格小幅下滑，但成交量很低。
-        *   **含义**：卖盘并不积极，通常是正常的获利盘回吐或主力在震仓洗人。
-        """)
-    # --- 9. 技术指标深度说明：超买、超卖与超跌 ---
-    with st.expander("💡 进阶指南：如何识别超买、超卖与超跌"):
-        st.markdown(f"""
-        ### 1. 超买 (Overbought) —— 警惕回调
-        *   **定义**：指资产价格上涨过快、过高，超出了其内在价值或近期平均水平。
-        *   **技术识别**：
-            *   **RSI > 70**：反映上涨动能进入极端区域，买方力量可能接近衰竭。
-            *   **布林带 (Bollinger Bands)**：股价触碰或穿出**上轨**，暗示价格偏离均值过远。
-        *   **操作策略**：通常是**减仓或止盈**的信号，不建议此时追涨。
+            #### **A. 看跌背离 (Bearish Divergence) —— 逃顶信号**
+            * **现象**：股价创出**新高**，但 RSI 线却在走**下坡路**（高点比前一个高点低）。
+            * **含义**：虽然价格在涨，但支撑上涨的动能正在减弱。
+            * **操作**：建议减仓或调高止损位。
 
-        ### 2. 超卖 (Oversold) —— 关注反弹
-        *   **定义**：指资产价格下跌过快、过低，通常是由于市场情绪过度恐慌导致的非理性抛售。
-        *   **技术识别**：
-            *   **RSI < 30**：反映下跌动能进入极端区域，卖方力量可能已经透支。
-            *   **布林带**：股价触碰或穿出**下轨**，暗示价格存在回归均值的需求。
-        *   **操作策略**：通常是**潜在的买入机会**，但需配合成交量缩小或底背离来确认。
+            #### **B. 看涨背离 (Bullish Divergence) —— 抄底信号**
+            * **现象**：股价创出**新低**，但 RSI 线却在走**上坡路**（低点比前一个低点高）。
+            * **含义**：下跌的杀伤力已经减弱，空头力量正在衰竭。
+            * **操作**：系统检测到 **{ticker}** 可能正处于此类信号中。
+            """)
 
-        ### 3. 超跌 (Overextended Downward) —— 寻找极限
-        *   **定义**：超跌是比“超卖”更深层的状态，通常指股价经历了长时间或极大幅度的连续下跌。
-        *   **核心区别**：超卖可能是短期的，而超跌往往意味着股价已经跌破了关键的长期支撑位（如 MA200 均线）。
-        *   **技术识别**：
-            *   **RSI 极低 (< 20)**：进入深度超卖区域。
-            *   **乖离率 (Bias)**：股价大幅低于其长期移动平均线。
-        *   **操作策略**：超跌股容易引发“报复性反弹”，是短线博弈高盈亏比机会的重点区域。
+    # --- 9. Technical Indicators: Overbought, Oversold & Overextended ---
+    if report_lang == "English":
+        with st.expander("💡 Pro Guide: Identifying Overbought vs. Oversold"):
+            st.markdown(f"""
+            ### 1. Overbought —— Warning of Pullback
+            * **Technical**: **RSI > 70** or price touching the **Upper Bollinger Band**.
+            * **Strategy**: Take profit or reduce exposure; avoid chasing highs.
 
-        ---
+            ### 2. Oversold —— Watching for Rebound
+            * **Technical**: **RSI < 30** or price piercing the **Lower Bollinger Band**.
+            * **Strategy**: Potential buying opportunity; look for volume confirmation.
 
-        ### ⚠️ 交易员笔记 (Professional Tips)
-        1.  **趋势陷阱**：在强劲的单边趋势中，RSI 可以长时间停留在超买（或超卖）区。**“超买不代表立刻跌，超卖不代表立刻涨”**。
-        2.  **双重确认**：最可靠的信号是当 RSI 从超买区**回落至 70 以下**，或从超卖区**回升至 30 以上**时。
-        3.  **结合背景**：系统检测到 **{ticker}** 的指标时，务必结合大盘 VIX 恐慌指数。若 VIX 同步走高，超卖反弹的可靠性更强。
-        """)
+            ### 3. Overextended (Deep Value) —— Finding the Limit
+            * **Definition**: Deeper than oversold; price is significantly below the 200-day MA.
+            * **Technical**: **RSI < 20** and extreme negative Bias.
+            * **Strategy**: High risk-reward ratio for "revenge rebounds."
 
+            ---
+
+            ### ⚠️ Professional Tips
+            1. **Trend Trap**: In strong trends, RSI can stay overbought/oversold for a long time. 
+            2. **Double Confirmation**: The signal is strongest when RSI crosses back inside the 30/70 levels.
+            3. **Context**: If **VIX** is rising while **{ticker}** is oversold, the rebound probability increases.
+            """)
+    else:
+        with st.expander("💡 进阶指南：如何识别超买、超卖与超跌"):
+            st.markdown(f"""
+            ### 1. 超买 (Overbought) —— 警惕回调
+            * **技术识别**：**RSI > 70** 或股价触碰**布林带上轨**。
+            * **操作策略**：通常是减仓信号，不建议此时追涨。
+
+            ### 2. 超卖 (Oversold) —— 关注反弹
+            * **技术识别**：**RSI < 30** 或股价穿出**布林带下轨**。
+            * **操作策略**：潜在买入机会，需配合成交量确认。
+
+            ### 3. 超跌 (Overextended) —— 寻找极限
+            * **核心区别**：比超卖更严重，股价远低于 MA200 均线。
+            * **操作策略**：极易引发“报复性反弹”。
+
+            ---
+
+            ### ⚠️ 交易员笔记 (Professional Tips)
+            1. **趋势陷阱**：超买不代表立刻跌，超卖不代表立刻涨。
+            2. **双重确认**：最可靠信号是 RSI 回到正常区间内。
+            3. **结合背景**：系统检测 **{ticker}** 指标时，请同步关注 VIX 指数。
+            """)
+            
     # VIX & Earnings
     st.divider()
     vix_col, earn_col = st.columns([2, 1])
@@ -324,10 +351,29 @@ if not prices.empty and ticker in prices.columns:
     else:
         st.error("❌ Failed to retrieve news. Run: `pip install -U yfinance`.")
 
-# --- 10. Gemini AI 深度决策系统 ---
+
+    # --- 10. Gemini AI 深度决策系统 ---
     st.divider()
-    st.header("🤖 Gemini AI 深度决策系统")
-    
+
+    # 动态设置标题和按钮文字
+    if report_lang == "English":
+        header_text = "🤖 Activate Deep AI Decision System"
+        button_text = "🚀 Generate Realtime AI Report"
+        spinner_text = "Gemini is analyzing market data..."
+    else:
+        header_text = "🤖 启用 AI 深度决策系统"
+        button_text = "🚀 生成实时 AI 报告"
+        spinner_text = "Gemini 正在联网分析中..."
+
+    st.header(header_text)
+
+    # ... (中间的 tech_data 和 news_titles 定义保持不变) ...
+
+    if st.button(button_text):
+        with st.spinner(spinner_text):
+            # 调用函数并传入 report_lang
+            report = run_gemini_pro_analysis(ticker, tech_data, news_titles, report_lang)
+            st.markdown(report)
     current_rsi_val = rsi_series.iloc[-1] if not rsi_series.empty else "N/A"
     tech_data = {
         "price": f"${prices[ticker].iloc[-1]:.2f}",
@@ -335,15 +381,12 @@ if not prices.empty and ticker in prices.columns:
         "vix": f"{current_vix:.2f}",
         "lookback": f"{lookback} days"
     }
-    
+
     # 提取新闻标题列表
     news_titles = [item['title'] for item in final_news] if final_news else "No recent news found."
 
-    if st.button("🚀 生成实时深度研究报告"):
-        with st.spinner("Gemini 正在联网分析中..."):
-            # 直接调用上面定义的函数
-            report = run_gemini_pro_analysis(ticker, tech_data, news_titles)
-            st.markdown(report)
+
+
 
 else:
     st.error("❌ Data Fetch Failed. Check connection or Ticker.")
