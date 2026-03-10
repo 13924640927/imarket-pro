@@ -352,10 +352,23 @@ if not prices.empty and ticker in prices.columns:
         st.error("❌ Failed to retrieve news. Run: `pip install -U yfinance`.")
 
 
-    # --- 10. Gemini AI 深度决策系统 ---
+# --- 10. Gemini AI 深度决策系统 ---
     st.divider()
+    
+    # 【位置 A】：在这里准备所有数据，确保它们在同一个 if 缩进块内
+    # 1. 准备技术指标数据
+    current_rsi_val = rsi_series.iloc[-1] if not rsi_series.empty else "N/A"
+    tech_data = {
+        "price": f"${prices[ticker].iloc[-1]:.2f}",
+        "rsi": f"{current_rsi_val:.2f}",
+        "vix": f"{current_vix:.2f}",
+        "lookback": f"{lookback} days"
+    }
+    
+    # 2. 【核心修复】：在这里提取新闻标题，确保它在 final_news 之后，st.button 之前
+    news_titles = [item['title'] for item in final_news] if final_news else "No recent news found."
 
-    # 动态设置标题和按钮文字
+    # 3. 动态 UI 文字设置
     if report_lang == "English":
         header_text = "🤖 Activate Deep AI Decision System"
         button_text = "🚀 Generate Realtime AI Report"
@@ -367,24 +380,12 @@ if not prices.empty and ticker in prices.columns:
 
     st.header(header_text)
 
-    # ... (中间的 tech_data 和 news_titles 定义保持不变) ...
-
+    # 【位置 B】：按钮触发
     if st.button(button_text):
         with st.spinner(spinner_text):
-            # 调用函数并传入 report_lang
+            # 此时 tech_data 和 news_titles 已经在上面准备就绪了
             report = run_gemini_pro_analysis(ticker, tech_data, news_titles, report_lang)
             st.markdown(report)
-    current_rsi_val = rsi_series.iloc[-1] if not rsi_series.empty else "N/A"
-    tech_data = {
-        "price": f"${prices[ticker].iloc[-1]:.2f}",
-        "rsi": f"{current_rsi_val:.2f}",
-        "vix": f"{current_vix:.2f}",
-        "lookback": f"{lookback} days"
-    }
-
-    # 提取新闻标题列表
-    news_titles = [item['title'] for item in final_news] if final_news else "No recent news found."
-
 
 
 
