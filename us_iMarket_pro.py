@@ -177,6 +177,7 @@ def get_reddit_sentiment(ticker):
     return 0, 0
 
 # --- 4. Sidebar Control ---
+st.sidebar.image("iMarket Pro.png", use_container_width=True)
 st.sidebar.title("Control Center")
 ticker_input = st.sidebar.text_input("Ticker (e.g., AAPL 🇺🇸 | AC.TO 🇨🇦)", "AAPL").upper()
 
@@ -189,6 +190,8 @@ else:
         st.sidebar.info("💡 Tip: For Canada, add .TO")
 
 lookback = st.sidebar.slider("Lookback Period (Divergence)", 30, 250, 90)
+
+
 st.sidebar.markdown("---")
 # 这里的变量名 report_lang 必须对应你 352 行使用的名字
 report_lang = st.sidebar.selectbox(" 🌐🇺🇸/🇨🇳", ["English", "中文"])
@@ -201,6 +204,42 @@ st.sidebar.caption("📅  v3.0 | March 2026")
 
 
 # --- 5. Market Index Bar Execution ---
+
+
+# --- 品牌标题：位置上移并微调黑字副标题 ---
+st.markdown(
+    """
+    <div style="text-align: center; margin-top: -40px; margin-bottom: 5px; padding-top: 0px;">
+        <h1 style="
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            font-weight: 800; 
+            background: linear-gradient(135deg, #d4af37 25%, #f7e7ce 50%, #d4af37 75%); 
+            -webkit-background-clip: text; 
+            -webkit-text-fill-color: transparent; 
+            text-shadow: 1px 1px 8px rgba(212, 175, 55, 0.2);
+            letter-spacing: -1px; 
+            margin-bottom: 0px;
+            font-size: 3.2rem;
+            line-height: 1.1;
+        ">
+            iMarket Pro
+        </h1>
+        <p style="
+            color: #000000; 
+            font-size: 1.1rem; 
+            font-weight: 600; 
+            letter-spacing: 2px; 
+            text-transform: uppercase;
+            margin-top: -8px;
+            margin-bottom: 10px;
+        ">
+            AI-Powered Market Research Engine
+        </p>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
+
 index_data = fetch_market_indices()
 st.title(f"📊 {ticker} Technical & Sentiment Dashboard")
 
