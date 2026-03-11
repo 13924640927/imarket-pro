@@ -378,26 +378,44 @@ if not prices.empty and ticker in prices.columns:
         ax_v.fill_between(vix_df.index, vix_df['Close'], 20, where=(vix_df['Close'] > 20), color='red', alpha=0.1)
         st.pyplot(fig_v)
 
-    # --- Integrated Tested Earnings Module ---
+# --- Integrated Tested Earnings Module (V3 Refined) ---
     with earn_col:
-        st.subheader("📅 Earnings Warning")
         ticker_obj = yf.Ticker(ticker)
         next_earn_date = None
+        
         try:
+            # 1. 优先使用新版接口
             earnings = ticker_obj.get_earnings_dates(limit=1)
-            if not earnings.empty: next_earn_date = earnings.index[0].date()
+            if earnings is not None and not earnings.empty:
+                next_earn_date = earnings.index[0].date()
+            
+            # 2. 如果失败，尝试备选 calendar 接口
             if next_earn_date is None:
                 cal = ticker_obj.calendar
-                if isinstance(cal, dict): next_earn_date = cal.get('Earnings Date')[0].date()
-                elif isinstance(cal, pd.DataFrame): next_earn_date = cal.iloc[0, 0].date()
-        except: pass
+                if isinstance(cal, dict) and 'Earnings Date' in cal:
+                    next_earn_date = cal.get('Earnings Date')[0].date()
+                elif isinstance(cal, pd.DataFrame) and not cal.empty:
+                    next_earn_date = cal.iloc[0, 0].date()
+        except:
+            pass # 失败时不报错，静默处理
 
+        # --- 核心改进：只有拿到日期才显示 UI ---
         if next_earn_date:
+            st.subheader("📅 Earnings Schedule") # 只有成功了才显示标题
             days_left = (next_earn_date - datetime.now().date()).days
-            st.info(f"Next Earnings: **{next_earn_date}** (In **{days_left}** days)")
-            if 0 <= days_left <= 7: st.error("⚠️ Earnings Week: High IV expected!")
+            
+            if days_left >= 0:
+                st.info(f"Next Earnings: **{next_earn_date}** (In **{days_left}** days)")
+                if 0 <= days_left <= 7:
+                    st.error("⚠️ Earnings Week: High IV expected!")
+            else:
+                # 日期已过（比如是昨天），显示为“待定”
+                st.caption("📅 Next Earnings: TBA (Post-Earnings Period)")
         else:
-            st.warning("⚠️ Could not fetch earnings date automatically.")
+            # 自动隐藏警告：如果获取不到，直接不占地方，或者只留一个极小的灰色提示
+            # 删掉原本的 st.warning，改为下面这种不显眼的提示
+            st.caption("📅 Earnings info currently unavailable from Yahoo Finance")
+            
         
         
         
