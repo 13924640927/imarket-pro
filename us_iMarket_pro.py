@@ -241,7 +241,12 @@ st.markdown(
 )
 
 index_data = fetch_market_indices()
-st.title(f"📊 {ticker} Technical & Sentiment Dashboard")
+# st.title(f"📊 {ticker} Technical & Sentiment Dashboard")
+
+
+
+
+
 
 if index_data:
     idx_cols = st.columns(len(index_data))
@@ -256,58 +261,55 @@ st.divider()
 prices = fetch_financial_data(ticker, lookback)
 
 if not prices.empty and ticker in prices.columns:
-    # Indicator Logic
-    delta = prices[ticker].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    # --- 指标逻辑计算 ---
+    delta_series = prices[ticker].diff()
+    gain = (delta_series.where(delta_series > 0, 0)).rolling(14).mean()
+    loss = (-delta_series.where(delta_series < 0, 0)).rolling(14).mean()
     rsi_series = 100 - (100 / (1 + (gain / loss)))
     
     current_vix = prices["^VIX"].iloc[-1] if "^VIX" in prices.columns else 0
     vix_sma = prices["^VIX"].rolling(20).mean().iloc[-1] if "^VIX" in prices.columns else 1
 
-    # Metrics Section
+    # --- 新增：Price 涨跌核心逻辑 ---
+    curr_price = prices[ticker].iloc[-1]
+    prev_close = prices[ticker].iloc[-2]
+    price_change = curr_price - prev_close
+    price_change_pct = (price_change / prev_close) * 100
+
+    # --- Metrics Section (仪表盘指标卡) ---
     st.subheader(f"⚠️ {ticker} Real-time Sentiment Warning")
     mentions, wsb_score = get_reddit_sentiment(ticker)
+    
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Price", f"${prices[ticker].iloc[-1]:.2f}")
-    m2.metric("RSI", f"{rsi_series.iloc[-1]:.2f}", delta="OB" if rsi_series.iloc[-1] > 70 else "OS" if rsi_series.iloc[-1] < 30 else "Normal")
-    m3.metric("VIX", f"{current_vix:.2f}", delta=f"{((current_vix/vix_sma)-1)*100:.1f}%", delta_color="inverse")
-    m4.metric("WSB", f"{mentions}", delta="Sentiment Check")
-
-    # Technical Chart
-    st.subheader("📈 Technical Analysis (Bollinger + MACD)")
-    daily = yf.download(ticker, period="1y", interval="1d")
-    if isinstance(daily.columns, pd.MultiIndex): daily.columns = daily.columns.droplevel(1)
     
-    ma20 = daily['Close'].rolling(20).mean()
-    std20 = daily['Close'].rolling(20).std()
-    up_bb, lo_bb = ma20 + (std20 * 2), ma20 - (std20 * 2)
-    macd = daily['Close'].ewm(span=12).mean() - daily['Close'].ewm(span=26).mean()
-    sig = macd.ewm(span=9).mean()
-    hist = macd - sig
-
-    apds = [
-        mpf.make_addplot(up_bb, color='gray', alpha=0.2),
-        mpf.make_addplot(lo_bb, color='gray', alpha=0.2),
-        mpf.make_addplot(macd, panel=2, color='fuchsia', ylabel='MACD'),
-        mpf.make_addplot(sig, panel=2, color='blue'),
-        mpf.make_addplot(hist, panel=2, type='bar', color='gray', alpha=0.3)
-    ]
-    fig, axlist = mpf.plot(daily, type='candle', style='yahoo', volume=True, mav=(20, 50, 200), addplot=apds, panel_ratios=(6,2,2), returnfig=True, figsize=(12, 8))
-    axlist[0].legend(['MA20', 'MA50', 'MA200', 'Upper BB', 'Lower BB'], loc='upper left', fontsize='x-small')
-    st.pyplot(fig)
-
-    # Divergence Chart
-    st.divider()
-    st.subheader("🔍 Price Momentum & Technical Divergence")
-    fig_div, (ax_p, ax_r) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-    plt.subplots_adjust(hspace=0.1)
-    ax_p.plot(prices.index, prices[ticker], color='#1f77b4', label="Price")
-    ax_r.plot(rsi_series.index, rsi_series, color='#9467bd', label="RSI")
-    ax_r.axhline(70, color='red', ls='--'); ax_r.axhline(30, color='green', ls='--')
-    ax_p.legend(); ax_r.legend()
-    st.pyplot(fig_div)
+    # 替换后的 Price：现在具备涨跌色块和标识
+    m1.metric(
+        label="Price", 
+        value=f"${curr_price:.2f}", 
+        delta=f"{price_change:+.2f} ({price_change_pct:+.2f}%)"
+    )
     
+    # RSI 保持原样
+    m2.metric(
+        label="RSI", 
+        value=f"{rsi_series.iloc[-1]:.2f}", 
+        delta="OB" if rsi_series.iloc[-1] > 70 else "OS" if rsi_series.iloc[-1] < 30 else "Normal"
+    )
+    
+    # VIX 保持原样
+    m3.metric(
+        label="VIX", 
+        value=f"{current_vix:.2f}", 
+        delta=f"{((current_vix/vix_sma)-1)*100:.1f}%", 
+        delta_color="inverse"
+    )
+    
+    # WSB 保持原样
+    m4.metric(
+        label="WSB", 
+        value=f"{mentions}", 
+        delta="Sentiment Check"
+    )
     
 # --- 8. Chart Legend Expander (Professional Analysis) ---
     if report_lang == "English":
