@@ -7,15 +7,102 @@ import feedparser
 import urllib.parse
 from datetime import datetime
 import google.generativeai as genai # 添加这一行
-
+import numpy as np
 # --- 1. Basic Configuration ---
 st.set_page_config(
     page_title="iMarket Professional | AI-Quant Terminal", 
     page_icon="⚖️", # 或者 "📈"
     layout="wide"
     )
-# 修改前: def run_gemini_pro_analysis(ticker, tech_metrics, news_summary):
-# 修改后:
+
+# --- 新增：深度估值计算函数 ---
+def get_advanced_valuation(ticker, discount_rate=0.15):
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        fcf = info.get('freeCashflow', 0)
+        shares = info.get('sharesOutstanding', 1)
+        curr_price = info.get('currentPrice', 1)
+        
+        # 保守型 DCF 计算 (5年期)
+        growth_rate = 0.05 
+        pv_fcf = sum([fcf * (1 + growth_rate)**i / (1 + discount_rate)**i for i in range(1, 6)])
+        terminal_v = (fcf * (1 + growth_rate)**5 * 1.02) / (discount_rate - 0.02)
+        pv_tv = terminal_v / (1 + discount_rate)**5
+        dcf_fair_value = (pv_fcf + pv_tv) / shares if shares > 0 else 0
+        upside = (dcf_fair_value / curr_price - 1) * 100
+
+        # 相对估值
+        ev_sales = info.get('enterpriseToRevenue', 0)
+        gp = info.get('grossProfits', 1)
+        ev_gp = info.get('enterpriseValue', 0) / gp if gp != 0 else 0
+        
+        return {
+            "dcf_price": dcf_fair_value,
+            "upside_pct": upside,
+            "ev_sales": ev_sales,
+            "ev_gp": ev_gp,
+            "sector": info.get('sector', 'N/A'),
+            "industry_avg_s": 4.5 # 示例行业基准
+        }
+    except:
+        return None
+
+# --- 新增：模型专用 AI 分析函数 ---
+def run_valuation_model_analysis(ticker, val_data, lang):
+    # 1. 密钥检查与初始化 (代码保持不变)
+    if "GEMINI_API_KEY" not in st.secrets: return "❌ API Key Missing"
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('models/gemini-3-flash-preview')
+
+    # 2. 核心修复：根据语言完全隔离指令，不混用中英文
+    if lang == "English":
+        format_cmd = """
+        IMPORTANT FORMATTING RULES:
+        1. Add a space BETWEEN numbers and text.
+        2. Use TWO newlines between bullet points to prevent text clumping.
+        3. Bold all key metrics (e.g., **63.84**).
+        """
+        prompt = f"""
+        Role: Senior Equity Analyst.
+        Data for {ticker}:
+        - DCF: ${val_data['dcf_price']:.2f} (Upside: {val_data['upside_pct']:.1f}%)
+        - EV/Sales: {val_data['ev_sales']:.2f}x
+        - EV/GP: {val_data['ev_gp']:.2f}x
+        
+        Task: Analyze if this is a 'Golden Pit' or 'Value Trap'. 
+        {format_cmd}
+        Output Language: Strictly English.
+        """
+    else:
+        # 中文版：确保指令全是中文，防止 AI 跑偏
+        format_cmd = """
+        排版要求：
+        1. 数字与汉字之间必须保留一个空格。
+        2. 每个要点（Bullet Point）之间必须使用两个换行符，确保视觉上完全分开。
+        3. 加粗关键指标（例如：**63.84**）。
+        """
+        prompt = f"""
+        角色：资深量化分析师。
+        {ticker} 建模数据：
+        - DCF 内在价值: ${val_data['dcf_price']:.2f} (空间: {val_data['upside_pct']:.1f}%)
+        - EV/Sales: {val_data['ev_sales']:.2f}x
+        - EV/GP: {val_data['ev_gp']:.2f}x
+        
+        任务：判断该公司是“黄金坑”还是“估值陷阱”。
+        {format_cmd}
+        输出语言：必须使用中文。
+        """
+
+    try:
+        response = model.generate_content(prompt)
+        # 3. 终极后处理：代码层强制替换，确保 Markdown 换行生效
+        cleaned_text = response.text.replace("\n*", "\n\n*").replace("\n-", "\n\n-")
+        return cleaned_text
+    except Exception as e:
+        return f"AI Error: {str(e)}"
+
+
 def run_gemini_pro_analysis(ticker, tech_metrics, news_summary, language="中文"):
     if "GEMINI_API_KEY" in st.secrets:
         api_key_val = st.secrets["GEMINI_API_KEY"]
@@ -352,11 +439,10 @@ if not prices.empty and ticker in prices.columns:
         st.error("❌ Failed to retrieve news. Run: `pip install -U yfinance`.")
 
 
-# --- 10. Gemini AI 深度决策系统 ---
+    # --- 10. Gemini AI 深度决策系统 (双引擎版) ---
     st.divider()
-    
-    # 【位置 A】：在这里准备所有数据，确保它们在同一个 if 缩进块内
-    # 1. 准备技术指标数据
+
+    # 【1. 数据准备区】：确保所有按钮都能拿到最新的数据
     current_rsi_val = rsi_series.iloc[-1] if not rsi_series.empty else "N/A"
     tech_data = {
         "price": f"${prices[ticker].iloc[-1]:.2f}",
@@ -364,31 +450,104 @@ if not prices.empty and ticker in prices.columns:
         "vix": f"{current_vix:.2f}",
         "lookback": f"{lookback} days"
     }
-    
-    # 2. 【核心修复】：在这里提取新闻标题，确保它在 final_news 之后，st.button 之前
     news_titles = [item['title'] for item in final_news] if final_news else "No recent news found."
 
-    # 3. 动态 UI 文字设置
+    # 【2. 动态 UI 文字配置】
     if report_lang == "English":
-        header_text = "🤖 Activate Deep AI Decision System"
-        button_text = "🚀 Generate Realtime AI Report"
-        spinner_text = "Gemini is analyzing market data..."
+        h_text = "🤖 AI Decision Dual Engines"
+        b1_text = "🚀 Real-time AI Report"
+        b2_text = "💎 Deep Valuation Model"
+        s1_text = "Analyzing Technicals & News..."
+        s2_text = "Running DCF & Valuation Models..."
     else:
-        header_text = "🤖 启用 AI 深度决策系统"
-        button_text = "🚀 生成实时 AI 报告"
-        spinner_text = "Gemini 正在联网分析中..."
+        h_text = "🤖 AI 决策双引擎系统"
+        b1_text = "🚀 生成实时 AI 报告"
+        b2_text = "💎 运行深度估值模型"
+        s1_text = "正在联网分析技术面与新闻..."
+        s2_text = "正在运行 DCF 与行业对比模型..."
 
-    st.header(header_text)
+    st.header(h_text)
 
-    # 【位置 B】：按钮触发
-    if st.button(button_text):
-        with st.spinner(spinner_text):
-            # 此时 tech_data 和 news_titles 已经在上面准备就绪了
-            report = run_gemini_pro_analysis(ticker, tech_data, news_titles, report_lang)
-            st.markdown(report)
+    # 【3. 按钮布局区】：并列展示
+    col_btn1, col_btn2 = st.columns(2)
 
+    with col_btn1:
+        # 按钮 1：你原来的老功能，完全不动核心逻辑
+        if st.button(b1_text, use_container_width=True):
+            with st.spinner(s1_text):
+                report = run_gemini_pro_analysis(ticker, tech_data, news_titles, report_lang)
+                st.markdown(report)
 
+    with col_btn2:
+        # 按钮 2：新增的模型功能
+        if st.button(b2_text, use_container_width=True):
+            with st.spinner(s2_text):
+                # 获取财务模型数据
+                v_data = get_advanced_valuation(ticker, 0.15) # 0.15 是高折现率
+                if v_data:
+                    # 展现核心数据卡片
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("DCF Value", f"${v_data['dcf_price']:.2f}", f"{v_data['upside_pct']:.1f}%")
+                    m2.metric("EV/Sales", f"{v_data['ev_sales']:.2f}x")
+                    m3.metric("EV/GP", f"{v_data['ev_gp']:.2f}x")
+                    
+                    # 调用专门的模型分析函数（这个函数需要你在代码前面定义好）
+                    model_report = run_valuation_model_analysis(ticker, v_data, report_lang)
+                    st.info(model_report)
+                else:
+                    st.error("Financial data unavailable for this ticker.")
 
+    with st.expander("📖 核心估值模型深度解读：DCF 与 企业价值倍数" if report_lang=="中文" else "📖 Deep Dive: DCF & Valuation Multiples"):
+        if report_lang == "中文":
+            st.markdown("""
+            ### 1. DCF (贴现现金流) - 寻找内在价值
+            * **原理**：DCF 认为公司现在的价值等于它未来能赚到的所有钱“折现”到今天的总和。
+            * **高折现率策略**：本系统默认采用 **15% 折现率**。这是一个极度保守的“滤网”，只有当股价远低于这个标准时，才具有真正的**安全边际**。
+            
+            ### 2. EV/Sales (企业价值/销售额) - 规模与定价权
+            * **逻辑**：相比 P/S，EV 考虑了公司的负债。
+            * **判读**：如果该指标显著低于行业平均，可能存在**低估**；如果极高且缺乏增长支撑，则是**估值泡沫**。
+
+            ### 3. EV/Gross Profit (企业价值/毛利) - 护城河指标
+            * **核心**：这是衡量 AI 与软件公司最硬核的指标。它反映了公司每 1 元毛利在市场上被赋予的溢价。
+            * **百分位意义**：查看当前倍数在过去 5 年的位置。处于 **20% 分位以下** 通常意味着处于“历史性底部”。
+            """)
+        else:
+            st.markdown("""
+            ### 1. DCF (Discounted Cash Flow) - The Intrinsic Value
+            * **Principle**: DCF posits that a company is worth the sum of all its future cash flows, brought back to present value.
+            * **High Discount Rate**: We use a **15% Discount Rate** by default. This acts as a conservative filter, ensuring a significant **Margin of Safety**.
+            
+            ### 2. EV/Sales - Scale & Pricing Power
+            * **Logic**: Unlike P/S, EV (Enterprise Value) accounts for the company's debt and cash levels.
+            * **Interpretation**: Significantly lower than industry average suggests **undervaluation**; excessively high suggests a **valuation bubble**.
+
+            ### 3. EV/Gross Profit - The Moat Metric
+            * **Core**: The ultimate metric for AI & SaaS firms. It shows the premium the market pays for every $1 of gross profit.
+            * **Percentile**: Metrics below the **20th percentile** over 5 years often indicate a "Historical Floor."
+            """)
+    with st.expander("💡 进阶指南：如何区分“黄金坑”与“估值陷阱”" if report_lang=="中文" else "💡 Advanced Guide: Golden Pit vs. Value Trap"):
+        if report_lang == "中文":
+            st.info("""
+            **🔍 识别黄金坑 (Golden Pit)**
+            - **指标**：DCF 空间 > 20% 且 EV/GP 处于历史低位。
+            - **信号**：AI 报告中提到“利空出尽”、“基本面改善”或“机构暗中吸筹”。
+            
+            **⚠️ 警惕估值陷阱 (Value Trap)**
+            - **指标**：估值看起来极低，但 DCF 计算显示未来现金流正在萎缩。
+            - **信号**：新闻中频繁出现“裁员”、“核心技术流失”或“法律诉讼”。
+            """)
+        else:
+            st.info("""
+            **🔍 Identifying a Golden Pit**
+            - **Metrics**: DCF Upside > 20% and EV/GP at historical lows.
+            - **Signals**: AI report mentions "Negative news priced in" or "Fundamental turnaround."
+            
+            **⚠️ Beware of Value Traps**
+            - **Metrics**: Ratios look cheap, but DCF reveals shrinking future cash flows.
+            - **Signals**: Frequent news regarding "Layoffs," "Loss of key talent," or "Litigation."
+            """)
+            
 else:
     st.error("❌ Data Fetch Failed. Check connection or Ticker.")
 
