@@ -283,8 +283,7 @@ def fetch_market_indices():
                     curr, prev = series.iloc[-1], series.iloc[-2]
                     diff = curr - prev 
                     pct = (diff / prev) * 100 
-                    results[name] = {"val": curr, "diff": diff, "pct": pct}
-        print(f"DEBUG: Scraped Indices: {list(results.keys())}")            
+                    results[name] = {"val": curr, "diff": diff, "pct": pct}          
         return results
     
     except Exception as e:
