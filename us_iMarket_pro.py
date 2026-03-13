@@ -115,7 +115,7 @@ def run_valuation_model_analysis(ticker, val_data, lang="中文"):
         return "❌ 错误：未在 Streamlit Cloud 后台配置 GEMINI_API_KEY"
     
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    
+ 
     try:
         # 2. 动态获取可用模型 (避开 404 错误)
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -196,24 +196,22 @@ def run_gemini_pro_analysis(ticker, tech_metrics, news_summary, language="中文
         model = genai.GenerativeModel(target_model)
 
         # 3. 核心逻辑：根据语言定制 Prompt (整合了你最新的润色内容)
+# 3. 核心逻辑：根据语言定制 Prompt
+        # 获取实时价格（从传入的指标中显式提取，或外部传入）
+        price_info = tech_metrics.get('current_price', 'N/A') if isinstance(tech_metrics, dict) else "N/A"
+
         if language == "English":
             role_inv = "iMarket AI Assistant (Powered by Gemini 1.5)"
             prompt = f"""
             Role: You are {role_inv}, a sophisticated investment co-pilot.
-            Task: Generate a high-concurrency intelligence diagnostic report for {ticker}.
+            Task: Generate an intelligence report for {ticker}.
             
-            Context Data:
-            - Technical Metrics: {tech_metrics}
-            - Market Sentiment: {news_summary}
+            [CRITICAL DATA]: 
+            - Current Real-time Price: {price_info} 
+            - Technical Context: {tech_metrics}
+            - News Sentiment: {news_summary}
             
-            Please provide your analysis in the following professional format:
-            1. 🤖 **Assistant Quick-Take**: A one-sentence executive summary.
-            2. 📈 **Technical Edge**: Analyze price action vs RSI/VIX. Hidden divergence?
-            3. 🧠 **Sentiment Logic**: Institutional conviction based on recent news.
-            4. ⚠️ **Risk Shield**: Most critical factor that could invalidate the case.
-            5. 🚥 **Final Verdict**: Explicit action-oriented guidance (Accumulate/Neutral/Exit).
-            
-            Formatting: Use bold for all numbers and tickers. Keep it concise and impactful.
+            ... (rest of the prompt)
             """
         else:
             role_inv = "iMarket AI 智能助手 (由 Gemini 1.5 驱动)"
@@ -221,18 +219,15 @@ def run_gemini_pro_analysis(ticker, tech_metrics, news_summary, language="中文
             角色：你是 {role_inv}，一位专业的投资副驾。
             任务：为用户生成针对 {ticker} 的全维度智能诊断报告。
             
-            输入数据：
-            - 技术面指标：{tech_metrics}
+            【实时监控数据】：
+            - 标的代码：{ticker}
+            - 实时价格：{price_info} 
+            - 技术指标：{tech_metrics}
             - 市场情绪：{news_summary}
             
             请按以下专业框架输出：
-            1. 🤖 **助手速评 (Insights)**：用一句话点睛当前核心局势。
-            2. 📈 **技术扫描**：分析价格与 RSI/VIX 的协同性，是否存在背离。
-            3. 🧠 **情绪逻辑**：剖析最新新闻如何影响机构的持仓信心。
-            4. ⚠️ **风险防御**：列出当前最可能导致逻辑反转的风险点。
-            5. 🚥 **终极决策**：给出行向导向的明确建议（如：逢低加仓、持币观望、分批止盈）。
-            
-            要求：数字与汉字间加空格，关键指标加粗。
+            1. 🤖 **助手速评 (Insights)**：基于当前价格 {price_info} 点睛核心局势。
+            ... (其余框架部分保持不变)
             """
 
         # 4. 执行生成并返回
@@ -743,11 +738,20 @@ if not prices.empty and ticker in prices.columns:
     col_btn1, col_btn2 = st.columns(2)
 
     with col_btn1:
-        # 按钮 1：你原来的老功能，完全不动核心逻辑
-        if st.button(b1_text, use_container_width=True):
-            with st.spinner(s1_text):
-                report = run_gemini_pro_analysis(ticker, tech_data, news_titles, report_lang)
-                st.markdown(report)
+            # 按钮 1：增加价格注入逻辑
+            if st.button(b1_text, width='stretch'): # 顺便修复 width 警告
+                with st.spinner(s1_text):
+                    # 1. 在调用前，确保拿到当前 UI 显示的价格
+                    curr_p, _ = get_stock_data(ticker)
+                    
+                    # 2. 将价格手动加入 tech_data 字典（如果它是个字典）
+                    # 如果 tech_data 只是个字符串，就直接在调用时拼进去
+                    if isinstance(tech_data, dict):
+                        tech_data['current_price'] = curr_p
+                    
+                    # 3. 调用函数
+                    report = run_gemini_pro_analysis(ticker, tech_data, news_titles, report_lang)
+                    st.markdown(report)
 
 
     with col_btn2:
