@@ -10,100 +10,159 @@ import google.generativeai as genai # 添加这一行
 import numpy as np
 # --- 1. Basic Configuration ---
 st.set_page_config(
-    page_title="iMarket Professional | AI-Quant Terminal", 
-    page_icon="⚖️", # 或者 "📈"
+    page_title="iMarket AI Assistant: Smart Decision Engine", 
+    page_icon="🤖",
     layout="wide"
     )
+# --- 新增：稳健型价格抓取函数 (防止 $nan) ---
+def get_stock_data(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        # 1. 优先从 info 获取
+        info = stock.info
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        prev_close = info.get('previousClose')
 
+        # 2. 如果 info 拿不到数据（常发生于盘后或 API 限制）
+        if current_price is None or (isinstance(current_price, float) and np.isnan(current_price)):
+            hist = stock.history(period="5d")
+            if not hist.empty:
+                current_price = hist['Close'].iloc[-1]
+                prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
+            else:
+                current_price, prev_close = 0.0, 0.0
+        
+        return float(current_price), float(prev_close if prev_close else current_price)
+    except:
+        return 0.0, 0.0
+    
 # --- 新增：深度估值计算函数 ---
 def get_advanced_valuation(ticker, discount_rate=0.15):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        fcf = info.get('freeCashflow', 0)
-        shares = info.get('sharesOutstanding', 1)
+        
+        # 1. 基础数据提取 (yfinance 默认返回完整数值)
+        fcf = info.get('freeCashflow') or info.get('operatingCashflow', 0) * 0.8 # 备选方案
+        shares = info.get('sharesOutstanding', 0)
         curr_price = info.get('currentPrice', 1)
         
-        # 保守型 DCF 计算 (5年期)
-        growth_rate = 0.05 
-        pv_fcf = sum([fcf * (1 + growth_rate)**i / (1 + discount_rate)**i for i in range(1, 6)])
-        terminal_v = (fcf * (1 + growth_rate)**5 * 1.02) / (discount_rate - 0.02)
-        pv_tv = terminal_v / (1 + discount_rate)**5
-        dcf_fair_value = (pv_fcf + pv_tv) / shares if shares > 0 else 0
-        upside = (dcf_fair_value / curr_price - 1) * 100
-
-        # 相对估值
-        ev_sales = info.get('enterpriseToRevenue', 0)
-        gp = info.get('grossProfits', 1)
-        ev_gp = info.get('enterpriseValue', 0) / gp if gp != 0 else 0
+        # 2. 净现金调整 (Net Cash = Total Cash - Total Debt)
+        total_cash = info.get('totalCash', 0)
+        total_debt = info.get('totalDebt', 0)
+        net_cash = total_cash - total_debt
         
+        if fcf <= 0 or shares <= 0:
+            return None
+
+        # 3. 保守型 DCF 计算
+        growth_rate = 0.05  # 前5年增长率
+        perp_growth = 0.02  # 永续增长率
+        
+        # 计算前5年现值
+        pv_fcf = 0
+        for i in range(1, 6):
+            future_fcf = fcf * (1 + growth_rate)**i
+            pv_fcf += future_fcf / (1 + discount_rate)**i
+        
+        # 计算终值 (Terminal Value) 并折现
+        terminal_v = (fcf * (1 + growth_rate)**5 * (1 + perp_growth)) / (discount_rate - perp_growth)
+        pv_tv = terminal_v / (1 + discount_rate)**5
+        
+        # 4. 企业价值转股权价值 (加上净现金)
+        # 内在价值 = (经营价值 + 净现金) / 总股本
+        dcf_intrinsic_value = (pv_fcf + pv_tv + net_cash) / shares
+        
+        # 防止极端负值（如果债务远超现金和现金流现值）
+        dcf_intrinsic_value = max(dcf_intrinsic_value, 0)
+        
+        upside = (dcf_intrinsic_value / curr_price - 1) * 100
+
         return {
-            "dcf_price": dcf_fair_value,
+            "dcf_price": dcf_intrinsic_value,
             "upside_pct": upside,
-            "ev_sales": ev_sales,
-            "ev_gp": ev_gp,
-            "sector": info.get('sector', 'N/A'),
-            "industry_avg_s": 4.5 # 示例行业基准
+            "ev_sales": info.get('enterpriseToRevenue', 0),
+            "ev_gp": info.get('enterpriseValue', 0) / info.get('grossProfits', 1) if info.get('grossProfits') else 0,
+            "sector": info.get('sector', 'N/A')
         }
-    except:
+    except Exception as e:
+        print(f"Valuation Error: {e}")
         return None
 
 # --- 新增：模型专用 AI 分析函数 ---
-def run_valuation_model_analysis(ticker, val_data, lang):
-    # 1. 密钥检查与初始化 (代码保持不变)
-    if "GEMINI_API_KEY" not in st.secrets: return "❌ API Key Missing"
+def run_valuation_model_analysis(ticker, val_data, lang="中文"):
+    """
+    执行 iMarket Pro 深度估值诊断。
+    基于 15% 严苛折现率的 DCF 模型进行量化判读。
+    """
+    # 1. 密钥安全检查
+    if "GEMINI_API_KEY" not in st.secrets:
+        return "❌ 错误：未在 Streamlit Cloud 后台配置 GEMINI_API_KEY"
+    
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('models/gemini-3-flash-preview')
-
-    # 2. 核心修复：根据语言完全隔离指令，不混用中英文
-    if lang == "English":
-        format_cmd = """
-        IMPORTANT FORMATTING RULES:
-        1. Add a space BETWEEN numbers and text.
-        2. Use TWO newlines between bullet points to prevent text clumping.
-        3. Bold all key metrics (e.g., **63.84**).
-        """
-        prompt = f"""
-        Role: Senior Equity Analyst.
-        Data for {ticker}:
-        - DCF: ${val_data['dcf_price']:.2f} (Upside: {val_data['upside_pct']:.1f}%)
-        - EV/Sales: {val_data['ev_sales']:.2f}x
-        - EV/GP: {val_data['ev_gp']:.2f}x
-        
-        Task: Analyze if this is a 'Golden Pit' or 'Value Trap'. 
-        {format_cmd}
-        Output Language: Strictly English.
-        """
-    else:
-        # 中文版：确保指令全是中文，防止 AI 跑偏
-        format_cmd = """
-        排版要求：
-        1. 数字与汉字之间必须保留一个空格。
-        2. 每个要点（Bullet Point）之间必须使用两个换行符，确保视觉上完全分开。
-        3. 加粗关键指标（例如：**63.84**）。
-        """
-        prompt = f"""
-        角色：资深量化分析师。
-        {ticker} 建模数据：
-        - DCF 内在价值: ${val_data['dcf_price']:.2f} (空间: {val_data['upside_pct']:.1f}%)
-        - EV/Sales: {val_data['ev_sales']:.2f}x
-        - EV/GP: {val_data['ev_gp']:.2f}x
-        
-        任务：判断该公司是“黄金坑”还是“估值陷阱”。
-        {format_cmd}
-        输出语言：必须使用中文。
-        """
-
+    
     try:
-        response = model.generate_content(prompt)
-        # 3. 终极后处理：代码层强制替换，确保 Markdown 换行生效
-        cleaned_text = response.text.replace("\n*", "\n\n*").replace("\n-", "\n\n-")
-        return cleaned_text
-    except Exception as e:
-        return f"AI Error: {str(e)}"
+        # 2. 动态获取可用模型 (避开 404 错误)
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        target_model = next((m for m in available_models if 'flash' in m.lower()), None)
+        
+        if not target_model:
+            target_model = available_models[0] if available_models else "gemini-1.5-flash"
+            
+        model = genai.GenerativeModel(target_model)
 
+        # 3. 构建硬核量化 Prompt (方案 B)
+        if lang == "English":
+            opening = f"**iMarket AI Valuation Engine:** Analysis for **{ticker}** finalized. Model penetration complete."
+            prompt = f"""
+            Role: Senior Quantitative Strategist & Valuation Expert.
+            Task: Evaluate {ticker} using a conservative 15% discount rate DCF model.
+            
+            Input Quant Data:
+            - Intrinsic Value (DCF): ${val_data['dcf_price']:.2f}
+            - Current Upside: {val_data['upside_pct']:.1f}%
+            - EV/Sales: {val_data['ev_sales']:.2f}x
+            - EV/GP (Moat Strength): {val_data['ev_gp']:.2f}x
+            
+            Reporting Requirements:
+            1. Start with: "{opening}"
+            2. Analyze the 'Margin of Safety' based on our 15% discount hurdle.
+            3. Differentiate between a 'Golden Pit' and a 'Value Trap'.
+            4. Use CLEAR bullet points with double spacing.
+            5. NO complex LaTeX math blocks. Use bold numbers only.
+            """
+        else:
+            opening = f"**iMarket AI 估值引擎：** **{ticker}** 建模分析已穿透。模型测算逻辑已就绪。"
+            prompt = f"""
+            角色：顶级华尔街量化策略师。
+            任务：基于 15% 严苛折现率的 DCF 模型，对 {ticker} 进行内在价值判读。
+            
+            底层建模数据：
+            - DCF 内在价值: ${val_data['dcf_price']:.2f}
+            - 预期空间: {val_data['upside_pct']:.1f}%
+            - EV/Sales (规模定价): {val_data['ev_sales']:.2f}x
+            - EV/GP (护城河强度): {val_data['ev_gp']:.2f}x
+            
+            报告要求：
+            1. 开场白必须是："{opening}"
+            2. 基于 15% 的高贴现率标准，深度辨析其“安全边际”与“估值陷阱”风险。
+            3. 每个要点之间必须空两行，严禁文字堆叠。
+            4. 严禁生成 LaTeX 公式，数字与汉字间加空格。
+            5. 结论需明确：是“利空出尽的黄金坑”还是“逻辑崩坏的陷阱”。
+            """
+
+        # 4. 生成响应并处理格式
+        response = model.generate_content(prompt)
+        # 强制增加换行符，确保 Markdown 渲染清晰
+        clean_text = response.text.replace("\n*", "\n\n*").replace("\n-", "\n\n-")
+        return clean_text
+
+    except Exception as e:
+        # 捕获异常，防止整个 Streamlit 应用崩溃
+        return f"❌ AI 诊断引擎暂时不可用: {str(e)}"
 
 def run_gemini_pro_analysis(ticker, tech_metrics, news_summary, language="中文"):
+    # 1. 密钥检查
     if "GEMINI_API_KEY" in st.secrets:
         api_key_val = st.secrets["GEMINI_API_KEY"]
     else:
@@ -112,28 +171,61 @@ def run_gemini_pro_analysis(ticker, tech_metrics, news_summary, language="中文
     genai.configure(api_key=api_key_val)
     
     try:
+        # 2. 自动获取可用的模型
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         if not available_models:
             return "❌ 你的 API Key 没有任何可用模型。"
         
+        # 优先使用 flash 模型以获得极速响应
         target_model = next((m for m in available_models if 'flash' in m.lower()), available_models[0])
         model = genai.GenerativeModel(target_model)
 
-        # --- 关键修改：根据选择切换 AI 的写作指令 ---
-        role_instruction = "Top Wall Street Quant Strategist" if language == "English" else "顶级华尔街量化策略师"
-        task_instruction = "write a deep research report" if language == "English" else "撰写深度研究报告"
+        # 3. 核心逻辑：根据语言定制 Prompt (整合了你最新的润色内容)
+        if language == "English":
+            role_inv = "iMarket AI Assistant (Powered by Gemini 1.5)"
+            prompt = f"""
+            Role: You are {role_inv}, a sophisticated investment co-pilot.
+            Task: Generate a high-concurrency intelligence diagnostic report for {ticker}.
+            
+            Context Data:
+            - Technical Metrics: {tech_metrics}
+            - Market Sentiment: {news_summary}
+            
+            Please provide your analysis in the following professional format:
+            1. 🤖 **Assistant Quick-Take**: A one-sentence executive summary.
+            2. 📈 **Technical Edge**: Analyze price action vs RSI/VIX. Hidden divergence?
+            3. 🧠 **Sentiment Logic**: Institutional conviction based on recent news.
+            4. ⚠️ **Risk Shield**: Most critical factor that could invalidate the case.
+            5. 🚥 **Final Verdict**: Explicit action-oriented guidance (Accumulate/Neutral/Exit).
+            
+            Formatting: Use bold for all numbers and tickers. Keep it concise and impactful.
+            """
+        else:
+            role_inv = "iMarket AI 智能助手 (由 Gemini 1.5 驱动)"
+            prompt = f"""
+            角色：你是 {role_inv}，一位专业的投资副驾。
+            任务：为用户生成针对 {ticker} 的全维度智能诊断报告。
+            
+            输入数据：
+            - 技术面指标：{tech_metrics}
+            - 市场情绪：{news_summary}
+            
+            请按以下专业框架输出：
+            1. 🤖 **助手速评 (Insights)**：用一句话点睛当前核心局势。
+            2. 📈 **技术扫描**：分析价格与 RSI/VIX 的协同性，是否存在背离。
+            3. 🧠 **情绪逻辑**：剖析最新新闻如何影响机构的持仓信心。
+            4. ⚠️ **风险防御**：列出当前最可能导致逻辑反转的风险点。
+            5. 🚥 **终极决策**：给出行向导向的明确建议（如：逢低加仓、持币观望、分批止盈）。
+            
+            要求：数字与汉字间加空格，关键指标加粗。
+            """
 
-        prompt = f"""
-        As a {role_instruction}, please {task_instruction} for {ticker}.
-        【Technical Metrics】: {tech_metrics}
-        【Recent News】: {news_summary}
-        Framework: Core Thesis, Technical Scan, Risk Analysis, and Investment Guidance.
-        Output Language: {language}
-        """
-
+        # 4. 执行生成并返回
         response = model.generate_content(prompt)
         return response.text
+
     except Exception as e:
+        # 捕获所有运行时的 API 或逻辑错误
         return f"❌ AI 分析出错: {str(e)}"
     
     
@@ -145,17 +237,19 @@ def fetch_market_indices():
         "TSX": "^GSPTSE", "Crude": "CL=F", "Gold": "GC=F", "USDX": "DX-Y.NYB"
     }
     try:
+        # 下载数据
         data = yf.download(list(indices.values()), period="2d", interval="1d", auto_adjust=True)
         close_data = data['Close'] if isinstance(data.columns, pd.MultiIndex) else data
         results = {}
+        
         for name, sym in indices.items():
             if sym in close_data.columns:
                 series = close_data[sym].dropna()
                 if len(series) >= 2:
                     curr, prev = series.iloc[-1], series.iloc[-2]
-                    diff = curr - prev
-                    pct = (diff / prev) * 100
-                    results[name] = {"val": curr, "pct": pct}
+                    diff = curr - prev  # 绝对涨跌额
+                    pct = (diff / prev) * 100 # 涨跌百分比
+                    results[name] = {"val": curr, "diff": diff, "pct": pct}
         return results
     except:
         return {}
@@ -174,7 +268,32 @@ def fetch_financial_data(ticker, days):
         return pd.DataFrame()
 
 def get_reddit_sentiment(ticker):
-    return 0, 0
+    """
+    模拟散户热度指标：结合成交量波动与价格乖离度
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="5d")
+        if hist.empty: return 0, "Neutral"
+        
+        # 计算今日成交量与 5 日均值的比率
+        avg_vol = hist['Volume'].mean()
+        curr_vol = hist['Volume'].iloc[-1]
+        vol_ratio = curr_vol / avg_vol
+        
+        # 逻辑：成交量翻倍通常意味着社交媒体热度飙升
+        mentions = int(vol_ratio * 10) # 模拟提及次数
+        
+        if vol_ratio > 2.0:
+            score = "High Heat 🔥"
+        elif vol_ratio > 1.2:
+            score = "Increasing"
+        else:
+            score = "Quiet"
+            
+        return mentions, score
+    except:
+        return 0, "N/A"
 
 # --- 4. Sidebar Control ---
 st.sidebar.image("iMarket Pro.png", use_container_width=True)
@@ -240,18 +359,50 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 index_data = fetch_market_indices()
-st.title(f"📊 {ticker} Technical & Sentiment Dashboard")
 
 if index_data:
     idx_cols = st.columns(len(index_data))
     for i, (name, d) in enumerate(index_data.items()):
-        mode, arrow = "off", "•"
-        if d['pct'] > 0: mode, arrow = "normal", "▲"
-        elif d['pct'] < 0: mode, arrow = "inverse", "▼"
-        idx_cols[i].metric(name, f"{d['val']:,.2f}", f"{arrow} {abs(d['pct']):.2f}%", delta_color=mode)
+        # 1. 格式化：强制带符号的绝对值 + 括号百分比
+        # 例如: "+450.23 (1.20%)" 或 "-120.50 (0.85%)"
+        delta_str = f"{d['diff']:+.2f} ({abs(d['pct']):.2f}%)"
+        
+        # 2. 标定颜色：
+        # normal 模式：正数绿(涨)，负数红(跌)
+        # off 模式：如果涨跌为0，显示灰色
+        m_color = "normal" if d['diff'] != 0 else "off"
+        
+        idx_cols[i].metric(
+            label=name, 
+            value=f"{d['val']:,.2f}", 
+            delta=delta_str, 
+            delta_color=m_color
+        )
 st.divider()
-
+st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); 
+        padding: 30px; 
+        border-radius: 20px; 
+        margin-bottom: 30px;
+        border: 1px solid rgba(255,255,255,0.1);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    ">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span style="font-size: 2.5rem;">🤖</span>
+            <div>
+                <h1 style="margin: 0; color: #ffffff; font-size: 2.2rem; letter-spacing: -0.5px;">
+                    iMarket AI Assistant <span style="color: #60a5fa; font-weight: 300;">| {ticker_input}</span>
+                </h1>
+                <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 1.1rem;">
+                    Smart Decision Engine • Technical Insights • Deep Valuation
+                </p>
+            </div>
+        </div>
+    </div>
+""", unsafe_allow_html=True)
 # --- 6. Main Indicators & Charts ---
 prices = fetch_financial_data(ticker, lookback)
 
@@ -266,10 +417,38 @@ if not prices.empty and ticker in prices.columns:
     vix_sma = prices["^VIX"].rolling(20).mean().iloc[-1] if "^VIX" in prices.columns else 1
 
     # Metrics Section
+    
+    # --- 修改处：看板数据调用 ---
+    price_val, prev_val = get_stock_data(ticker)
     st.subheader(f"⚠️ {ticker} Real-time Sentiment Warning")
     mentions, wsb_score = get_reddit_sentiment(ticker)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Price", f"${prices[ticker].iloc[-1]:.2f}")
+    # 动态显示涨跌幅
+    price_delta = price_val - prev_val
+    
+    # --- 价格与涨跌逻辑计算 ---
+    if price_val > 0:
+        # 1. 计算绝对值变化 (例如 -5.05)
+        change_abs = price_val - prev_val
+        
+        # 2. 计算百分比变化 (例如 -1.97%)
+        change_pct = (change_abs / prev_val) * 100 if prev_val != 0 else 0
+        
+        # 3. 组合成你想要的格式: "-5.05 (-1.97%)"
+        # +符号会自动处理正负号，.2f 保留两位小数
+        delta_display = f"{change_abs:+.2f} ({change_pct:+.2f}%)"
+
+        # --- 渲染到界面 ---
+        m1.metric(
+            label="Price", 
+            value=f"${price_val:.2f}", 
+            delta=delta_display,
+            delta_color="normal" # 自动：正数绿，负数红
+        )
+    else:
+        m1.metric("Price", "Data Error", delta=None)
+    
+
     m2.metric("RSI", f"{rsi_series.iloc[-1]:.2f}", delta="OB" if rsi_series.iloc[-1] > 70 else "OS" if rsi_series.iloc[-1] < 30 else "Normal")
     m3.metric("VIX", f"{current_vix:.2f}", delta=f"{((current_vix/vix_sma)-1)*100:.1f}%", delta_color="inverse")
     m4.metric("WSB", f"{mentions}", delta="Sentiment Check")
