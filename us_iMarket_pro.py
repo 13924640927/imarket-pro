@@ -714,24 +714,37 @@ if not prices.empty and ticker in prices.columns:
                 report = run_gemini_pro_analysis(ticker, tech_data, news_titles, report_lang)
                 st.markdown(report)
 
+
     with col_btn2:
-        # 按钮 2：新增的模型功能
         if st.button(b2_text, use_container_width=True):
             with st.spinner(s2_text):
-                # 获取财务模型数据
-                v_data = get_advanced_valuation(ticker, 0.15) # 0.15 是高折现率
-                if v_data:
+                # 1. 增加重试逻辑，确保不是因为网络波动导致失败
+                v_data = get_advanced_valuation(ticker, 0.15)
+                
+                # 如果第一次失败，尝试清除缓存并重抓一次
+                if not v_data:
+                    yf.Ticker(ticker).history(period="1d") # 激活连接
+                    v_data = get_advanced_valuation(ticker, 0.15)
+
+                # 2. 检查数据并渲染
+                if v_data and v_data.get('dcf_price') is not None:
                     # 展现核心数据卡片
                     m1, m2, m3 = st.columns(3)
-                    m1.metric("DCF Value", f"${v_data['dcf_price']:.2f}", f"{v_data['upside_pct']:.1f}%")
+                    
+                    # 标定估值颜色：upside > 0 绿色，upside < 0 红色
+                    u_color = "normal" if v_data['upside_pct'] > 0 else "inverse"
+                    
+                    m1.metric("DCF Value", f"${v_data['dcf_price']:.2f}", f"{v_data['upside_pct']:+.1f}%", delta_color=u_color)
                     m2.metric("EV/Sales", f"{v_data['ev_sales']:.2f}x")
                     m3.metric("EV/GP", f"{v_data['ev_gp']:.2f}x")
                     
-                    # 调用专门的模型分析函数（这个函数需要你在代码前面定义好）
+                    # 调用 AI 分析
                     model_report = run_valuation_model_analysis(ticker, v_data, report_lang)
                     st.info(model_report)
                 else:
-                    st.error("Financial data unavailable for this ticker.")
+                    # 3. 增强型错误提示，方便你排查
+                    st.error(f"⚠️ Financial data unavailable for {ticker}. This might be due to Yahoo Finance API limits on cloud servers. Please try again in 10 seconds.")
+
 
     with st.expander("📖 核心估值模型深度解读：DCF 与 企业价值倍数" if report_lang=="中文" else "📖 Deep Dive: DCF & Valuation Multiples"):
         if report_lang == "中文":
