@@ -8,6 +8,21 @@ import urllib.parse
 from datetime import datetime
 import google.generativeai as genai # 添加这一行
 import numpy as np
+st.markdown("""
+    <style>
+    /* 强制所有文本块自动换行，并修复字母间距 */
+    .stMarkdown p, .stMarkdown li {
+        word-wrap: break-word !important;
+        white-space: pre-wrap !important;
+        letter-spacing: normal !important;
+        line-height: 1.6 !important;
+    }
+    /* 针对估值报告容器的特别优化 */
+    div[data-testid="stNotification"] {
+        word-break: break-word;
+    }
+    </style>
+""", unsafe_allow_html=True)
 # --- 1. Basic Configuration ---
 st.set_page_config(
     page_title="iMarket AI Assistant: Smart Decision Engine", 
@@ -228,30 +243,52 @@ def run_gemini_pro_analysis(ticker, tech_metrics, news_summary, language="中文
         # 捕获所有运行时的 API 或逻辑错误
         return f"❌ AI 分析出错: {str(e)}"
     
-    
+
+
+
+
+
+
 # --- 2. Top Market Indices (Color-Coded) ---
+
 @st.cache_data(ttl=300)
 def fetch_market_indices():
     indices = {
         "DJIA": "^DJI", "NDX": "^NDX", "SPX": "^GSPC",
-        "TSX": "^GSPTSE", "Crude": "CL=F", "Gold": "GC=F", "USDX": "DX-Y.NYB"
+        "TSX": "^GSPTSE", "Crude": "CL=F", "Gold": "GC=F", 
+        "USDX": "DX=F"  # <--- 将 DX-Y.NYB 改为 DX=F (美元指数期货)
     }
+    # ... 其余逻辑不变 ...
     try:
-        # 下载数据
+        # 1. 下载原始数据
         data = yf.download(list(indices.values()), period="2d", interval="1d", auto_adjust=True)
-        close_data = data['Close'] if isinstance(data.columns, pd.MultiIndex) else data
+        
+        # --- 📍 替换开始：将原来的 close_data = ... 替换为以下逻辑 ---
+        if isinstance(data.columns, pd.MultiIndex):
+            if 'Close' in data.columns.levels[0]:
+                close_data = data['Close']
+            else:
+                close_data = data 
+        else:
+            close_data = data
+        # --- 📍 替换结束 ---
+
         results = {}
         
         for name, sym in indices.items():
+            # 确保 sym 存在于 columns 中
             if sym in close_data.columns:
                 series = close_data[sym].dropna()
                 if len(series) >= 2:
                     curr, prev = series.iloc[-1], series.iloc[-2]
-                    diff = curr - prev  # 绝对涨跌额
-                    pct = (diff / prev) * 100 # 涨跌百分比
+                    diff = curr - prev 
+                    pct = (diff / prev) * 100 
                     results[name] = {"val": curr, "diff": diff, "pct": pct}
+        print(f"DEBUG: Scraped Indices: {list(results.keys())}")            
         return results
-    except:
+    
+    except Exception as e:
+        st.error(f"Market Data Error: {e}")
         return {}
 
 # --- 3. Main Data Fetching ---
@@ -359,26 +396,25 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
+# 1. 调用抓取函数
 index_data = fetch_market_indices()
 
+# 2. 只有当抓取到数据时才渲染
 if index_data:
+    # 关键：使用 len(index_data) 动态分列
+    # 这样当你字典里有 7 个指数（含 USDX）时，它会自动创建 7 列
     idx_cols = st.columns(len(index_data))
+    
     for i, (name, d) in enumerate(index_data.items()):
-        # 1. 格式化：强制带符号的绝对值 + 括号百分比
-        # 例如: "+450.23 (1.20%)" 或 "-120.50 (0.85%)"
+        # 格式化 delta 字符串
         delta_str = f"{d['diff']:+.2f} ({abs(d['pct']):.2f}%)"
         
-        # 2. 标定颜色：
-        # normal 模式：正数绿(涨)，负数红(跌)
-        # off 模式：如果涨跌为0，显示灰色
-        m_color = "normal" if d['diff'] != 0 else "off"
-        
+        # 渲染到对应的列中
         idx_cols[i].metric(
             label=name, 
             value=f"{d['val']:,.2f}", 
             delta=delta_str, 
-            delta_color=m_color
+            delta_color="normal"
         )
 st.divider()
 st.markdown(f"""
